@@ -1,0 +1,104 @@
+// ====== CONFIG ======
+const SHEET_ID = '[REMOVE AND REPLACE WITH YOUR SHEET ID. KEEP THE '' AT THE BEGINNING AND END]'; // not the gid!!!!!
+const START_ROW = 4;
+const LOG_COL   = 26;
+
+const categoryMap = {
+  "food": 1, "foods": 1,
+  "misc": 3, "miscellaneous": 3,
+  "grocery": 5, "groceries": 5,
+  "gas": 7, "fuel": 7,
+  "cats": 9, "cat": 9, "pets": 9,
+  "cars": 11, "car": 11, "auto": 11
+};
+
+function getSheet() {
+  const ss = SHEET_ID ? SpreadsheetApp.openById(SHEET_ID)
+                      : SpreadsheetApp.getActiveSpreadsheet();
+  const tz = Session.getScriptTimeZone();
+  const monthName = Utilities.formatDate(new Date(), tz, 'MMMM');
+  let sh = ss.getSheetByName(monthName);
+  if (!sh) sh = ss.insertSheet(monthName);
+  return sh;
+}
+
+function writeLog(sh, lines) {
+  const logRow = sh.getLastRow() + 1;
+  sh.getRange(logRow, LOG_COL).setValue(lines.join(" | "));
+}
+
+function nextEmptyRowInColumn(sh, col, fromRow) {
+  const maxRows = sh.getMaxRows();
+  const height = Math.max(1, maxRows - fromRow + 1);
+  const vals = sh.getRange(fromRow, col, height, 1).getValues();
+  for (let i = vals.length - 1; i >= 0; i--) {
+    if (vals[i][0] !== "" && vals[i][0] !== null) return fromRow + i + 1;
+  }
+  return fromRow;
+}
+
+// sanity check
+function doGet() {
+  return ContentService.createTextOutput('OK');
+}
+
+function doPost(e) {
+  const sh = getSheet();
+  const log = [];
+  log.push("⚡ Script started " + new Date());
+
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      log.push("❌ No postData");
+      writeLog(sh, log);
+      return jsonReply({ ok:false, message:"No postData" });
+    }
+
+    const data = JSON.parse(e.postData.contents);
+    const amount = parseFloat(data.amount);
+    const rawCategory = (data.category || "").toString().trim();
+    const categoryKey = rawCategory.toLowerCase();
+    const note = (data.description || "").toString().trim();
+
+    log.push(`Data: amount=${amount} | category='${rawCategory}' | note='${note}'`);
+
+    if (!categoryMap.hasOwnProperty(categoryKey)) {
+      log.push("❌ Invalid category");
+      writeLog(sh, log);
+      return jsonReply({ ok:false, message:"Invalid category: " + rawCategory });
+    }
+    if (isNaN(amount)) {
+      log.push("❌ Invalid amount");
+      writeLog(sh, log);
+      return jsonReply({ ok:false, message:"Invalid amount: " + data.amount });
+    }
+
+    const colIndex = categoryMap[categoryKey];
+    const noteColIndex = colIndex + 1;
+    const targetRow = nextEmptyRowInColumn(sh, colIndex, START_ROW);
+
+    sh.getRange(targetRow, colIndex).setValue(amount);
+    if (note) sh.getRange(targetRow, noteColIndex).setValue(note);
+
+    log.push(`✅ Wrote amount in R${targetRow}C${colIndex}` + (note ? " + note" : ""));
+
+    // Build reply from N3
+    let reply = "Logged!";
+    try {
+      SpreadsheetApp.flush();
+      const n3 = sh.getRange("N3").getDisplayValue();
+      if (n3 && n3.trim() !== "") reply = n3 + " Spent this month.\n\nLegacy Level↗";
+    } catch (err) {
+      Logger.log("Error reading N3: " + err.message);
+    }
+
+    // at the end of doPost, after you build `reply`
+    writeLog(sh, log);
+    return ContentService.createTextOutput(reply);
+
+  } catch (err) {
+    log.push("❌ Script error: " + err.message);
+    writeLog(sh, log);
+    return jsonReply({ ok:false, message:"Error: " + err.message });
+  }
+}
